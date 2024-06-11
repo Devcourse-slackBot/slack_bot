@@ -188,14 +188,8 @@ def load(schema, table, fcst_dict):
     alter_sql = f"""DELETE FROM {schema}.{table};
     INSERT INTO {schema}.{table}
     SELECT fcst_timestamp, tmp, sky, pty, reh, pcp,
-      CASE
-        WHEN(tmx IS NOT NULL) then tmx
-        ELSE max_tmx
-      END as tmx,
-      CASE
-        WHEN(tmn IS NOT NULL) then tmn
-        ELSE max_tmn
-      END as tmn
+      NVL(tmx, max_tmx) as tmx
+      NVL(tmn, max_tmn) as tmn
     FROM 
       (SELECT *,  
         MAX(tmx) OVER(PARTITION BY fcst_timestamp) as max_tmx,

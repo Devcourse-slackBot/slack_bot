@@ -1,6 +1,7 @@
 from airflow import DAG
 from airflow.macros import *
 from airflow.models import Variable
+from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.decorators import task
 
 import os
@@ -13,8 +14,7 @@ import requests
 
 DAG_ID = "Navigator_v1"
 KAKAO_API_KEY = Variable.get("KAKAO_API_KEY")
-ORIGIN_ADDRESS = "서울 서초구 서초대로38길 12"
-DESTINATION_ADDRESS = "경기 성남시 분당구 정자일로 95 네이버 1784"
+
 
 def gps_api(address):
     url = "https://dapi.kakao.com/v2/local/search/address.json"
@@ -30,11 +30,41 @@ def gps_api(address):
     y = results["documents"][0]["y"]
     return x + "," + y
 
+
+def get_Redshift_connection(autocommit=True):
+    hook = PostgresHook(postgres_conn_id='redshift_dev_db')
+    conn = hook.get_conn()
+    conn.autocommit = autocommit
+    return conn.cursor()
+
+
+def read_meta_from_redshift():
+    cur = get_Redshift_connection()
+    schema = "cjswldn99"
+    table = "project_example"
+
+    query = f"SELECT * FROM {schema}.{table};"
+
+    try:
+        cur.execute(query)
+        records = cur.fetchall()
+        return records[0]
+    except Exception as e:
+        print(f"Error executing query: {e}")
+        raise
+    finally:
+        cur.close()
+
+
 @task
-def load_meta():
+def read_meta():
+    meta_query_result = read_meta_from_redshift()
+    logging.info(meta_query_result)
+    origin_address = meta_query_result[1]
+    destination_address = meta_query_result[2]
     return {
-        "origin" : gps_api(ORIGIN_ADDRESS),
-        "destination" : gps_api(DESTINATION_ADDRESS)
+        "origin" : gps_api(origin_address),
+        "destination" : gps_api(destination_address)
     }
 
 
@@ -70,9 +100,11 @@ def transform(api_results):
         "duration" : duration
     }
 
+
 @task
 def upload():
     pass
+
 
 with DAG(
     dag_id=DAG_ID,
@@ -85,9 +117,8 @@ with DAG(
         'retries': 1,
         'retry_delay': timedelta(minutes=1),
     }
-
 ) as dag:
-    meta = load_meta()
+    meta = read_meta()
     api_results = navi_api(meta)
     transformed = transform(api_results)
 

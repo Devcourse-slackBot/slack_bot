@@ -188,7 +188,7 @@ def load(schema, table, fcst_dict):
     alter_sql = f"""DELETE FROM {schema}.{table};
     INSERT INTO {schema}.{table}
     SELECT fcst_timestamp, tmp, sky, pty, reh, pcp,
-      NVL(tmx, max_tmx) as tmx
+      NVL(tmx, max_tmx) as tmx,
       NVL(tmn, max_tmn) as tmn
     FROM 
       (SELECT *,  

@@ -25,6 +25,14 @@ def get_Redshift_connection(autocommit=True):
     return conn.cursor()
 
 
+"""
+카카오 길찾기 api 호출하는 메서드
+주소를 입력받아, 그에 맞는 정보를 반환
+그 중, 위도와 경도만 추출
+
+input: '서울', '서울시', '서울특별시', '서울 반포4동', '서울 서초구 반포4동' 다양한 형식의 string
+return: 위도와 경도를 담은 dict
+"""
 def gps_api(address):
     url = "https://dapi.kakao.com/v2/local/search/address.json"
     params = {
@@ -43,6 +51,15 @@ def gps_api(address):
     }
 
 
+"""
+redshift로부터 사용자의 주소를 읽어오는 task
+
+return: 
+{
+    "origin_address" : "서울"
+    "destination_address" : "부산"
+}
+"""
 @task
 def read_cities():
     cur = get_Redshift_connection()
@@ -66,6 +83,22 @@ def read_cities():
         cur.close()
 
 
+"""
+카카오 지도 api 호출 task
+
+input: read_cities 반환 결과
+return:
+{
+    "origin_gps" : {
+            "longitude" : ...,
+            "latitude" : ...
+    },
+    "destination_gps" : {
+            "longitude" : ...,
+            "latitude" : ...
+    }
+}
+"""
 @task
 def city_to_gps(cities):
     origin_gps = gps_api(cities["origin_address"])
@@ -78,6 +111,23 @@ def city_to_gps(cities):
     }
 
 
+"""
+기상청 좌표 변환 task
+dags.utils.forecast_gird 를 이용하여 변환
+
+input: city_to_gps 반환 결과
+return:
+{
+    "origin_gps" : {
+        "nx" : ...,
+        "ny" : ...
+    },
+    "destination_gps" : {
+        "nx" : ...,
+        "ny" : ...
+    }
+}
+"""
 @task
 def gps_to_forecast_grid(gps):
     origin_lat, origin_long = float(gps["origin_gps"]["latitude"]), float(gps["origin_gps"]["longitude"])

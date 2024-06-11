@@ -1,5 +1,6 @@
 from airflow import DAG
 from airflow.macros import *
+from airflow.models import Variable
 from airflow.decorators import task
 
 import os
@@ -11,7 +12,7 @@ import requests
 
 
 DAG_ID = "Navigator_v1"
-KAKAO_API_KEY = "4a557cf15da358ba907d36ba0d7581af"
+KAKAO_API_KEY = Variable.get("KAKAO_API_KEY")
 ORIGIN_ADDRESS = "서울 서초구 서초대로38길 12"
 DESTINATION_ADDRESS = "경기 성남시 분당구 정자일로 95 네이버 1784"
 

@@ -41,7 +41,7 @@ def get_Redshift_connection(autocommit=True):
 def read_meta_from_redshift():
     cur = get_Redshift_connection()
     schema = "cjswldn99"
-    table = "project_example"
+    table = "morning_slack_user_info"
 
     query = f"SELECT * FROM {schema}.{table};"
 
@@ -60,8 +60,8 @@ def read_meta_from_redshift():
 def read_meta():
     meta_query_result = read_meta_from_redshift()
     logging.info(meta_query_result)
-    origin_address = meta_query_result[1]
-    destination_address = meta_query_result[2]
+    origin_address = meta_query_result[0]
+    destination_address = meta_query_result[1]
     return {
         "origin" : gps_api(origin_address),
         "destination" : gps_api(destination_address)

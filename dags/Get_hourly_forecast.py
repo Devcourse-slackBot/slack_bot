@@ -166,7 +166,7 @@ def transform_pcp(pcp_value):
 def load(schema, table, fcst_dict):
     """
     Redshift에 시간별 날씨 정보를 Incremental Update를 수행
-    예측 날짜 시간인 fcst_timestamp를 기준으로 가장 최신의 레코드들을 적재하여 멱등성을 보장,
+    예측 날짜 시간인 fcst_timestamp, 위처 id인 location 둘 모두를 식별자로 하여 가장 최신의 레코드들을 적재하여 멱등성을 보장,
     하지만, 그 날의 최고기온인 tmx와 최저기온인 tmn은 최신 레코드에서 Null로 들어오는 경우가 있어, 이 경우에는 기존의 값을 유지하도록 함.
     적재 방식은
     1. 원본 테이블을 복사한 임시테이블에 새 레코드들을 적재하고,

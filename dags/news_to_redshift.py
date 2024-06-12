@@ -27,7 +27,7 @@ def fetch_news(category=None, page_size=20):
     return df
 
 def load_to_redshift(schema, categories):
-    redshift_hook = PostgresHook(postgres_conn_id='redshift_dev_db')
+    redshift_hook = PostgresHook(postgres_conn_id='redshift_morning_slack')  # Airflow connection ID 사용
     conn = redshift_hook.get_conn()
     cur = conn.cursor()
     
@@ -82,7 +82,7 @@ dag = DAG(
 )
 
 categories = [None, 'business', 'entertainment', 'health', 'science', 'sports', 'technology']
-schema = 'wnstkd525'  # 스키마 지정.
+schema = 'morningslack'  # 스키마 지정.
 
 fetch_and_load_task = PythonOperator(
     task_id='fetch_and_load_news',

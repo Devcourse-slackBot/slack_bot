@@ -54,14 +54,14 @@ def gps_api(address):
 """
 데이터로부터 Insert query를 작성해주는 메서드
 """
-def get_insert_sql(location_data):
+def get_insert_sql(location_data, id):
     sql_format = """
         INSERT INTO {schema}.user_location VALUES (
-            '{address}', '{latitude}', '{longitude}', '{nx}', '{ny}', '{location_type}'
+            '{id}', '{address}', '{latitude}', '{longitude}', '{nx}', '{ny}', '{location_type}'
         );
     """
     return sql_format.format(
-        schema=SCHEMA, address=location_data["address"],
+        id=id, schema=SCHEMA, address=location_data["address"],
         latitude=location_data["latitude"], longitude=location_data["longitude"],
         nx=location_data["nx"], ny=location_data["ny"],
         location_type=location_data["location_type"]
@@ -187,6 +187,7 @@ def load_user_location(user_location):
     sql_create_table = f"""
         DROP TABLE IF EXISTS {SCHEMA}.user_location;
         CREATE TABLE {SCHEMA}.user_location (
+            id int primary key,
             address varchar(200),
             latitude float,
             longitude float,
@@ -195,8 +196,8 @@ def load_user_location(user_location):
             location_type varchar(20) -- origin 혹은 destination
         );
     """
-    sql_origin_insert = get_insert_sql(user_location["origin"])
-    sql_destination_insert = get_insert_sql(user_location["destination"])
+    sql_origin_insert = get_insert_sql(user_location["origin"], "1")
+    sql_destination_insert = get_insert_sql(user_location["destination"], "2")
 
     logging.info(f"sql_create_table:\n{sql_create_table}")
     logging.info(f"sql_origin_insert:\n{sql_origin_insert}")

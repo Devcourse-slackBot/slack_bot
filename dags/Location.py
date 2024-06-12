@@ -218,7 +218,7 @@ def load_user_location(user_location):
 
 with DAG(
     dag_id=DAG_ID,
-    schedule_interval="0 8 * * *",
+    schedule_interval="30 1 * * *",
     max_active_runs=1,
     concurrency=1,
     catchup=False,

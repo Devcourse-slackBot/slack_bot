@@ -45,14 +45,14 @@ def load_to_redshift(schema, categories):
         # Create table
         create_table_query = f"""
         CREATE TABLE {table_name} (
-            source VARCHAR(65535),
-            author VARCHAR(65535),
-            title VARCHAR(65535),
-            description VARCHAR(65535),
-            url VARCHAR(65535),
-            url_to_image VARCHAR(65535),
+            source VARCHAR(256),
+            author VARCHAR(256),
+            title VARCHAR(512),
+            description VARCHAR(8192),
+            url VARCHAR(1024),
+            url_to_image VARCHAR(1024),
             published_at TIMESTAMP,
-            content VARCHAR(65535)
+            content VARCHAR(8192)
         );
         """
         cur.execute(create_table_query)

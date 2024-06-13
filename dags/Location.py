@@ -16,6 +16,7 @@ from utils.forecast_grid import grid
 
 DAG_ID = "Location_v1"
 KAKAO_API_KEY = Variable.get("KAKAO_API_KEY")
+SCHEMA = Variable.get("PROJECT_SCHEMA")
 
 
 def get_Redshift_connection(autocommit=True):
@@ -50,6 +51,21 @@ def gps_api(address):
         "latitude" : y
     }
 
+"""
+데이터로부터 Insert query를 작성해주는 메서드
+"""
+def get_insert_sql(location_data, id):
+    sql_format = """
+        INSERT INTO {schema}.user_location VALUES (
+            '{id}', '{address}', '{latitude}', '{longitude}', '{nx}', '{ny}', '{location_type}'
+        );
+    """
+    return sql_format.format(
+        id=id, schema=SCHEMA, address=location_data["address"],
+        latitude=location_data["latitude"], longitude=location_data["longitude"],
+        nx=location_data["nx"], ny=location_data["ny"],
+        location_type=location_data["location_type"]
+    )
 
 """
 redshift로부터 사용자의 주소를 읽어오는 task
@@ -63,10 +79,9 @@ return:
 @task
 def read_cities():
     cur = get_Redshift_connection()
-    schema = "cjswldn99"
-    table = "morning_slack_user_info"
+    table = "user_data"
 
-    query = f"SELECT * FROM {schema}.{table};"
+    query = f"SELECT * FROM {SCHEMA}.{table};"
 
     try:
         cur.execute(query)
@@ -118,11 +133,11 @@ dags.utils.forecast_gird 를 이용하여 변환
 input: city_to_gps 반환 결과
 return:
 {
-    "origin_gps" : {
+    "origin_grid" : {
         "nx" : ...,
         "ny" : ...
     },
-    "destination_gps" : {
+    "destination_grid" : {
         "nx" : ...,
         "ny" : ...
     }
@@ -142,9 +157,68 @@ def gps_to_forecast_grid(gps):
     }
 
 
+@task
+def transform(cities, gps_info, grid_info):
+    user_location = {
+        "origin" : {
+            "address" : cities["origin_address"],
+            "latitude" : gps_info["origin_gps"]["latitude"],
+            "longitude" : gps_info["origin_gps"]["longitude"],
+            "nx" : grid_info["origin_grid"]["nx"],
+            "ny" : grid_info["origin_grid"]["ny"],
+            "location_type" : "origin"
+        },
+        "destination" : {
+            "address" : cities["destination_address"],
+            "latitude" : gps_info["destination_gps"]["latitude"],
+            "longitude" : gps_info["destination_gps"]["longitude"],
+            "nx" : grid_info["destination_grid"]["nx"],
+            "ny" : grid_info["destination_grid"]["ny"],
+            "location_type" : "destination"
+        }
+    }
+    logging.info(f"user_location: \n{user_location}")
+    return user_location
+
+@task
+def load_user_location(user_location):
+    cur = get_Redshift_connection()
+    
+    sql_create_table = f"""
+        DROP TABLE IF EXISTS {SCHEMA}.user_location;
+        CREATE TABLE {SCHEMA}.user_location (
+            id int primary key,
+            address varchar(200),
+            latitude float,
+            longitude float,
+            nx int,
+            ny int,
+            location_type varchar(20) -- origin 혹은 destination
+        );
+    """
+    sql_origin_insert = get_insert_sql(user_location["origin"], "1")
+    sql_destination_insert = get_insert_sql(user_location["destination"], "2")
+
+    logging.info(f"sql_create_table:\n{sql_create_table}")
+    logging.info(f"sql_origin_insert:\n{sql_origin_insert}")
+    logging.info(f"sql_destination_insert:\n{sql_destination_insert}")
+
+    try:
+        cur.execute("BEGIN;")
+        cur.execute(sql_create_table)
+        cur.execute(sql_origin_insert)
+        cur.execute(sql_destination_insert)
+        cur.execute("COMMIT;")
+    except Exception as e:
+        logging.info(f"Error executing query: {e}")
+        cur.execute("ROLLBACK;")
+        raise
+    finally:
+        cur.close()
+
 with DAG(
     dag_id=DAG_ID,
-    schedule_interval="0 8 * * *",
+    schedule_interval="30 1 * * *",
     max_active_runs=1,
     concurrency=1,
     catchup=False,
@@ -157,4 +231,6 @@ with DAG(
     cities = read_cities()
     gps_info = city_to_gps(cities)
     gird_info = gps_to_forecast_grid(gps_info)
+    user_location = transform(cities, gps_info, gird_info)
+    load_user_location(user_location)
 

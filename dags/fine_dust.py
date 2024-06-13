@@ -13,17 +13,50 @@ import json
 
 def get_Redshift_connection():
     # autocommit is False by default
-    hook = PostgresHook(postgres_conn_id='redshift_dev_db')  # 팀프로젝트 connection으로 변경 필요 
+    hook = PostgresHook(postgres_conn_id='redshift_morning_slack')  # 팀프로젝트 connection으로 변경 필요 
     return hook.get_conn().cursor()
+
+
+def get_locations():
+    user_table = 'user_data'
+    query = f'SELECT * FROM {user_table}'
+
+    cur = get_Redshift_connection()
+    try:
+        cur.execute(query)
+        logging.info(query)
+        records = cur.fetchall()[0][:2]
+        locations = [r.split()[1] for r in records]
+
+        return locations
+
+    except Exception as e:
+        logging.info(f"Error executing {query}: {e}")
+        raise
+
+
+def evaluate_finedust(value):
+    if value < 0: return "통신장애"
+    elif value == 1: return "좋음"
+    elif value == 2: return "보통"
+    elif value == 3: return "나쁨"
+    elif value == 4: return "매우나쁨"
 
 
 @task
 def extract(location):
     logging.info(f"Extracting data for location: {location}")
     api_key = Variable.get('fine_dust_api_key')
-
-    url = 'http://apis.data.go.kr/B552584/ArpltnInforInqireSvc/getMsrstnAcctoRltmMesureDnsty' # airflow Variables로 변경 필요
-    params ={'serviceKey' : api_key, 'returnType' : 'json', 'numOfRows' : '100', 'pageNo' : '1', 'stationName' : location, 'dataTerm' : 'DAILY', 'ver' : '1.1' }
+    url = Variable.get('fine_dust_api_url')
+    params ={
+        'serviceKey' : api_key, 
+        'returnType' : 'json', 
+        'numOfRows' : '100', 
+        'pageNo' : '1', 
+        'stationName' : location, 
+        'dataTerm' : 'DAILY', 
+        'ver' : '1.1' 
+        }
 
     # 이전 23시간의 기록 가져오기
     response = requests.get(url, params=params)
@@ -37,8 +70,12 @@ def transform(location, extract_data):
 
     for d in extract_data:
         keys_to_extract = ['pm10Value', 'pm25Value', 'pm10Grade', 'pm25Grade', 'pm10Value24', 'pm25Value24']
-        data = [int(d[key]) if d[key].isdigit() else -1 for key in keys_to_extract] # 통신 장애가 발생한 경우 '-' 값은 -1로 변환
-        
+        data = [int(d.get(key, -1)) if d[key].isdigit() else -1 for key in keys_to_extract] # 통신 장애가 발생한 경우 '-' 값은 -1로 변환
+
+        # pm10Grade, pm25Grade 
+        data[2] = evaluate_finedust(data[2])
+        data[3] = evaluate_finedust(data[3])
+
         # dataTime 값 수정
         dataTime_str = d["dataTime"]
 
@@ -70,8 +107,8 @@ def load(location, transformed_data):
     location varchar(50),
     pm10value int,  
     pm25value int,
-    pm10grade int, 
-    pm25grade int,
+    pm10grade varchar(20), 
+    pm25grade varchar(20),
     pm10value24 int, 
     pm25value24 int, 
     datatime timestamp,
@@ -130,7 +167,7 @@ def load(location, transformed_data):
 
 # DAG 정의
 with DAG(
-    dag_id = 'fine_dust_etl',
+    dag_id = 'ms_fine_dust',
     description='ETL for fine dust data',
     schedule_interval='20 * * * *', # 매 시 20분마다 작동 
     max_active_runs=1,
@@ -142,9 +179,9 @@ with DAG(
     'retry_delay': timedelta(minutes=5),
 }) as dag:
     
-    schema = 'itme2019' # 팀프로젝트 스키마로 변경 
+    schema = 'morningslack' # 팀프로젝트 스키마로 변경 
     table = 'fine_dust'
-    locations = ['강남구', '서초구']
+    locations = get_locations()
 
     for location in locations:
         extract_task = extract.override(task_id=f'extract_{location}')(location)

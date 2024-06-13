@@ -4,8 +4,10 @@ from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk.models.blocks import SectionBlock, ActionsBlock, ButtonElement, Option, DividerBlock
 import psycopg2
+from datetime import datetime, timedelta
 
-#! 설정 파일 읽기 - 개인 환경에 맞게 설정필요.
+
+# 설정 파일 읽기
 with open("/opt/airflow/slack_info.json") as f:
     config = json.load(f)
 
@@ -69,6 +71,11 @@ def display_initial_options(say):
                     text="뉴스를 보여줘",
                     action_id="button_news",
                     value="news"
+                ),
+                ButtonElement(
+                    text="소요시간을 알려줘",
+                    action_id="button_duration",
+                    value="duration"
                 )
             ]
         )
@@ -76,25 +83,67 @@ def display_initial_options(say):
     say(blocks=blocks)
 
 def get_weather_from_db(location):
-    # 이 함수는 데이터베이스에서 날씨 정보를 읽어오는 함수입니다.
-
-    # DB 접속 및 슬랙봇 메세지 전달 테스트
-    conn = connect_to_redshift(dbname,user,password,host,port,schema)
+    conn = connect_to_redshift(dbname, user, password, host, port, schema)
+    current_date_time = datetime.now()
+    date = current_date_time.date()
+    start_time = current_date_time.time()
+    end_time = (current_date_time + timedelta(hours=4)).time()
     try:
-        with conn.cursor() as cur :
-            cur.execute(f"SELECT * FROM {schema}.nps_summary LIMIT 1 ")
-            result = cur.fetchone()
-            print(result)
-            if result :
-                return result[0]
-            else :
+        with conn.cursor() as cur:
+            query = f"""
+            WITH target_location AS (
+                SELECT id, address
+                FROM {schema}.user_location
+                WHERE address LIKE '%{location}%'
+            ),
+            weather_info AS (
+                SELECT t2.*
+                FROM {schema}.hourly_local_forecast t2
+                JOIN target_location tl ON t2.location = tl.id
+                WHERE DATE(t2.fcst_timestamp) = '{date}'
+            ),
+            dust_info AS (
+                SELECT t3.*
+                FROM {schema}.fine_dust t3
+                JOIN target_location tl 
+                ON t3.location = TRIM(SUBSTRING(tl.address FROM POSITION(' ' IN tl.address) + 1 
+                            FOR POSITION(' ' IN SUBSTRING(tl.address FROM POSITION(' ' IN tl.address) + 1)) - 1))
+                WHERE DATE(t3.datatime) = '{date}'
+            )
+            SELECT 
+                tl.address,
+                wi.fcst_timestamp,
+                wi.tmp,
+                wi.sky,
+                wi.pcp,
+                wi.reh,
+                wi.pty,
+                di.pm10grade,
+                di.pm25grade
+            FROM 
+                target_location tl
+            JOIN 
+                weather_info wi ON wi.location = tl.id
+            LEFT JOIN 
+                dust_info di ON di.location = TRIM(SUBSTRING(tl.address FROM POSITION(' ' IN tl.address) + 1 
+                                FOR POSITION(' ' IN SUBSTRING(tl.address FROM POSITION(' ' IN tl.address) + 1)) - 1))
+            AND wi.fcst_timestamp = di.datatime
+            WHERE wi.fcst_timestamp >= '{date} {start_time}' AND wi.fcst_timestamp <= '{date} {end_time}'
+            ORDER BY
+                wi.fcst_timestamp;
+            """
+            cur.execute(query)
+            results = cur.fetchall()
+            if results:
+                weather_report = "\n".join([f"{row[1].strftime('%H:%M')}시: 기온 {row[2]}°C, 강수량 {row[4]}, 습도 {row[5]}%, 강수확률 {row[6]}(%), 미세먼지 {row[7] if row[7] else '정보 없음'}, 초미세먼지 {row[8] if row[8] else '정보 없음'}" for row in results])
+                return weather_report
+            else:
                 return None
     except Exception as e:
-        logger.error(f'Error fetching weather data : {e}')
+        logger.error(f'Error fetching weather data: {e}')
         return None
     finally:
         conn.close()
-    
 def get_news(category):
     # 카테고리별 최신뉴스 3개를 가져와서 보여준다.
     category_map = {
@@ -125,22 +174,20 @@ def get_news(category):
 
     return news_data
 
-@app.event("app_mention")
-def handle_app_mention_events(body, say, logger):
-    event = body['event']
+def get_duration_from_db(origin, destination):
+    # 데이터베이스에서 소요시간을 조회하는 로직
+    # 예시로 하드코딩된 값을 반환
+    return "30분"
+
+# 이벤트 처리 로직을 공통 함수로 분리
+def handle_event(event, say, logger):
     user_id = event['user']
     channel_id = event['channel']
     text = event['text']
 
-    logger.info(f"Received app_mention event: {body}")  # 로그 출력 추가
+    logger.info(f"Received event: {event}")
 
     if channel_id != TARGET_CHANNEL_ID:
-        return
-
-    if "처음" in text.strip().lower():
-        reset_user_state(user_id)
-        say("처음부터 다시 시작합니다. 무엇을 도와드릴까요?")
-        display_initial_options(say)
         return
 
     if user_id not in user_states:
@@ -153,30 +200,29 @@ def handle_app_mention_events(body, say, logger):
             say(f"{location}의 날씨는 {weather_info}입니다.")
         else:
             say(f"{location}의 날씨 정보를 가져올 수 없습니다.")
-        
+        reset_user_state(user_id)
+    elif user_states[user_id] == 'waiting_for_origin':
+        user_states[user_id] = {
+            'state': 'waiting_for_destination',
+            'origin': text.strip()
+        }
+        say("도착지를 입력해주세요.")
+    elif user_states[user_id]['state'] == 'waiting_for_destination':
+        origin = user_states[user_id]['origin']
+        destination = text.strip()
+        duration = get_duration_from_db(origin, destination)
+        say(f"{origin}에서 {destination}까지의 소요시간은 {duration}입니다.")
         reset_user_state(user_id)
 
+# app_mention 이벤트 핸들러
+@app.event("app_mention")
+def handle_app_mention_events(body, say, logger):
+    handle_event(body['event'], say, logger)
+
+# message 이벤트 핸들러
 @app.event("message")
 def handle_message_events(body, say, logger):
-    logger.info(f"Received message event: {body}")
-    
-    event = body['event']
-    user_id = event['user']
-    text = event['text']
-    if "처음" in text.strip().lower():
-        reset_user_state(user_id)
-        say("처음부터 다시 시작합니다. 무엇을 도와드릴까요?")
-        display_initial_options(say)
-        return
-
-    if user_id in user_states and user_states[user_id] == 'waiting_for_location':
-        location = text.strip()
-        weather_info = get_weather_from_db(location)
-        if weather_info:
-            say(f"{location}의 날씨는 {weather_info}입니다.")
-        else:
-            say(f"{location}의 날씨 정보를 가져올 수 없습니다.")
-        reset_user_state(user_id)
+    handle_event(body['event'], say, logger)
 
 @app.action("button_weather")
 def handle_button_weather(ack, body, say):
@@ -268,6 +314,13 @@ def handle_news_category_selection(ack, body, say):
         reset_user_state(user_id)
     else:
         say("잘못된 카테고리 선택입니다. 다시 시도해주세요.")
+
+@app.action("button_duration")
+def handle_button_duration(ack, body, say):
+    ack()
+    user_id = body['user']['id']
+    say("출발지를 입력해주세요.")
+    user_states[user_id] = 'waiting_for_origin'
 
 if __name__ == "__main__":
     handler = SocketModeHandler(app, config["SLACK_APP_TOKEN"])

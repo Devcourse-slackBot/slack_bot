@@ -20,16 +20,26 @@ def get_Redshift_connection():
 def get_locations():
     user_table = 'user_data'
     query = f'SELECT * FROM {user_table}'
+    get_stationName_query = f'SELECT stationname FROM user_location_station WHERE id = (%s)'
 
     cur = get_Redshift_connection()
     try:
         cur.execute(query)
         logging.info(query)
-        records = cur.fetchall()[0][:2]
-        locations = [r.split()[1] for r in records]
+        data = cur.fetchall()[0][:2]
+        records = {address: idx+1 for idx, address in enumerate(data)} # {s_address:1, e_address:2} 
+
+        locations = []
+        for address, id in records.items():
+            if address.startswith('서울'): # 주소가 서울이면, 구 이름 append
+                locations.append([address.split()[1], id])
+            else:  # 그 이외의 지역이면 측정소 이름 가져오기
+                cur.execute(get_stationName_query, (id,))
+                stationName = cur.fetchone()
+                locations.append([stationName, id])
 
         return locations
-
+    
     except Exception as e:
         logging.info(f"Error executing {query}: {e}")
         raise
@@ -64,7 +74,7 @@ def extract(location):
 
 
 @task
-def transform(location, extract_data):
+def transform(id, location, extract_data):
     logging.info(f"Transforming data for location: {location}")
     transformed_data = []
 
@@ -91,6 +101,7 @@ def transform(location, extract_data):
             data.append(d["dataTime"])
 
         data.insert(0, location)  # load에서 편리함을 위해 location 첫번째 인덱스로 insert
+        data.insert(0, id)
         transformed_data.append(data)
 
     return transformed_data
@@ -104,7 +115,8 @@ def load(location, transformed_data):
 
     create_table_sql = f"""
     CREATE TABLE IF NOT EXISTS {schema}.{table} (
-    location varchar(50),
+    id int,
+    station_name varchar(50),
     pm10value int,  
     pm25value int,
     pm10grade varchar(20), 
@@ -119,11 +131,11 @@ def load(location, transformed_data):
     empty_check_sql = f"""SELECT EXISTS (SELECT 1 FROM {schema}.{table});"""
 
     insert_sql = f"""
-    INSERT INTO {schema}.{table} (location, pm10value, pm25value, pm10grade, pm25grade, pm10value24, pm25value24, datatime)
-    VALUES (%s, %s, %s, %s, %s, %s, %s, %s);
+    INSERT INTO {schema}.{table} (id, station_name, pm10value, pm25value, pm10grade, pm25grade, pm10value24, pm25value24, datatime)
+    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);
     """
 
-    max_datatime_sql = f"""SELECT max(datatime) FROM {schema}.{table} WHERE location =  %s;"""
+    max_datatime_sql = f"""SELECT max(datatime) FROM {schema}.{table} WHERE station_name = %s;"""
     
 
     try:
@@ -142,7 +154,7 @@ def load(location, transformed_data):
 
             if max_datatime:  # 해당 location의 데이터가 이미 있는 경우
                 for d in transformed_data:
-                    if datetime.strptime(d[7],'%Y-%m-%d %H:%M') > max_datatime:  # incremental update 
+                    if datetime.strptime(d[8],'%Y-%m-%d %H:%M') > max_datatime:  # incremental update 
                         cur.execute(insert_sql, tuple(d))
                         logging.info(d)
             
@@ -179,13 +191,13 @@ with DAG(
     'retry_delay': timedelta(minutes=5),
 }) as dag:
     
-    schema = 'morningslack' # 팀프로젝트 스키마로 변경 
+    schema = 'morningslack' 
     table = 'fine_dust'
     locations = get_locations()
 
-    for location in locations:
+    for location, id in locations:
         extract_task = extract.override(task_id=f'extract_{location}')(location)
-        transform_task = transform.override(task_id=f'transform_{location}')(location, extract_task)
+        transform_task = transform.override(task_id=f'transform_{location}')(id, location, extract_task)
         load_task = load.override(task_id=f'load_{location}')(location, transform_task)
 
 extract_task >> transform_task >> load_task

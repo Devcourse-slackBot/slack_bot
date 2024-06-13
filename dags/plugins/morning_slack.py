@@ -48,11 +48,12 @@ def connect_to_redshift(dbname,user,password,host,port,schema):
         print(f"Error : {e}")
         raise
         
-
+# 유저 상태 초기화.
 def reset_user_state(user_id):
     if user_id in user_states:
-        user_states.pop(user_id)
+        del user_states[user_id]
 
+# 초기 메세지와 버튼 초기화
 def display_initial_options(say):
     blocks = [
         SectionBlock(
@@ -82,6 +83,9 @@ def display_initial_options(say):
     ]
     say(blocks=blocks)
 
+# 지역에 따른 날씨를 가져오는 함수
+# 지역은 user_location['address'] 의 첫 공백과 두번째 공백 사이에 있는 값을 가져와 테이블 간 join 을 진행
+# 조회기간은 당시 서버시간 ~ 서버시간+4 까지 조회
 def get_weather_from_db(location):
     conn = connect_to_redshift(dbname, user, password, host, port, schema)
     current_date_time = datetime.now()
@@ -106,7 +110,7 @@ def get_weather_from_db(location):
                 SELECT t3.*
                 FROM {schema}.fine_dust t3
                 JOIN target_location tl 
-                ON t3.location = TRIM(SUBSTRING(tl.address FROM POSITION(' ' IN tl.address) + 1 
+                ON t3.station_name = TRIM(SUBSTRING(tl.address FROM POSITION(' ' IN tl.address) + 1 
                             FOR POSITION(' ' IN SUBSTRING(tl.address FROM POSITION(' ' IN tl.address) + 1)) - 1))
                 WHERE DATE(t3.datatime) = '{date}'
             )
@@ -125,7 +129,7 @@ def get_weather_from_db(location):
             JOIN 
                 weather_info wi ON wi.location = tl.id
             LEFT JOIN 
-                dust_info di ON di.location = TRIM(SUBSTRING(tl.address FROM POSITION(' ' IN tl.address) + 1 
+                dust_info di ON di.station_name = TRIM(SUBSTRING(tl.address FROM POSITION(' ' IN tl.address) + 1 
                                 FOR POSITION(' ' IN SUBSTRING(tl.address FROM POSITION(' ' IN tl.address) + 1)) - 1))
             AND wi.fcst_timestamp = di.datatime
             WHERE wi.fcst_timestamp >= '{date} {start_time}' AND wi.fcst_timestamp <= '{date} {end_time}'
@@ -144,6 +148,9 @@ def get_weather_from_db(location):
         return None
     finally:
         conn.close()
+
+# 뉴스 정보를 가져오는 함수
+# published_at 를 기준으로 최신 뉴스 3개만 가져와 보여주도록함.
 def get_news(category):
     # 카테고리별 최신뉴스 3개를 가져와서 보여준다.
     category_map = {
@@ -174,10 +181,26 @@ def get_news(category):
 
     return news_data
 
-def get_duration_from_db(origin, destination):
-    # 데이터베이스에서 소요시간을 조회하는 로직
-    # 예시로 하드코딩된 값을 반환
-    return "30분"
+# 출발지 ~ 도착지 소요시간을 가져오는 함수
+# duration_info 테이블을 참고하여 특정 유저가 사용하는 상황을 가정
+# 특정 유저의 출발지와 도착지가 저장되어 있고 그에 따라 소요시간을 조회
+def get_duration_from_db():
+    conn = connect_to_redshift(dbname, user, password, host, port, schema)
+    query = f"""SELECT * FROM {schema}.duration_info LIMIT 1"""
+    try:
+        with conn.cursor() as cur:
+            cur.execute(query)
+            row = cur.fetchone()
+            if row:
+                navi = {"origin": row[1], "destination": row[2], "duration": row[3]}
+                return navi
+            else:
+                return None
+    except Exception as e:
+        logger.error(f'Error fetching duration data: {e}')
+        return None
+    finally:
+        conn.close()
 
 # 이벤트 처리 로직을 공통 함수로 분리
 def handle_event(event, say, logger):
@@ -201,18 +224,7 @@ def handle_event(event, say, logger):
         else:
             say(f"{location}의 날씨 정보를 가져올 수 없습니다.")
         reset_user_state(user_id)
-    elif user_states[user_id] == 'waiting_for_origin':
-        user_states[user_id] = {
-            'state': 'waiting_for_destination',
-            'origin': text.strip()
-        }
-        say("도착지를 입력해주세요.")
-    elif user_states[user_id]['state'] == 'waiting_for_destination':
-        origin = user_states[user_id]['origin']
-        destination = text.strip()
-        duration = get_duration_from_db(origin, destination)
-        say(f"{origin}에서 {destination}까지의 소요시간은 {duration}입니다.")
-        reset_user_state(user_id)
+
 
 # app_mention 이벤트 핸들러
 @app.event("app_mention")
@@ -222,8 +234,12 @@ def handle_app_mention_events(body, say, logger):
 # message 이벤트 핸들러
 @app.event("message")
 def handle_message_events(body, say, logger):
-    handle_event(body['event'], say, logger)
+    event = body['event']
+    # @슬랙봇 과 같이 멘션을 하지 않을 때 처리 해야하는 경우
+    if 'subtype' not in event or event['subtype'] != 'bot_message':
+        handle_event(event, say, logger)
 
+# 아래는 각 버튼에 따른 이벤트, user_state 지정
 @app.action("button_weather")
 def handle_button_weather(ack, body, say):
     ack()
@@ -318,9 +334,11 @@ def handle_news_category_selection(ack, body, say):
 @app.action("button_duration")
 def handle_button_duration(ack, body, say):
     ack()
-    user_id = body['user']['id']
-    say("출발지를 입력해주세요.")
-    user_states[user_id] = 'waiting_for_origin'
+    duration_info = get_duration_from_db()
+    if duration_info:
+        say(f"{duration_info['origin']}에서 {duration_info['destination']}까지의 소요시간은 {duration_info['duration']/60 :.2f}분 소요됩니다.")
+    else:
+        say("소요시간 정보를 가져올 수 없습니다.")
 
 if __name__ == "__main__":
     handler = SocketModeHandler(app, config["SLACK_APP_TOKEN"])

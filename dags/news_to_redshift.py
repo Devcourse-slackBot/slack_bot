@@ -72,7 +72,7 @@ def load_to_redshift(schema, categories):
 dag = DAG(
     dag_id='news_to_redshift_combined',
     start_date=datetime(2024, 6, 10),
-    schedule_interval='0 9 * * *',
+    schedule_interval='0 3 * * *',
     max_active_runs=1,
     catchup=False,
     default_args={

@@ -30,7 +30,7 @@ schema = config["SCHEMA"]
 # ssl_context = ssl.create_default_context(cafile=certifi.where())
 # slack_client = WebClient(token=config["SLACK_BOT_TOKEN"], ssl=ssl_context)
 #
-# app = App(client=slack_client, ssl_check_enabled=False)
+# app = App(client=slack_client)
 
 app = App(token=config["SLACK_BOT_TOKEN"])
 

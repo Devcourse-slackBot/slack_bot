@@ -3,8 +3,12 @@ import logging
 from slack_bolt import App
 from slack_bolt.adapter.socket_mode import SocketModeHandler
 from slack_sdk.models.blocks import SectionBlock, ActionsBlock, ButtonElement, Option, DividerBlock
+from slack_sdk.web import WebClient
 import psycopg2
 from datetime import datetime, timedelta
+import ssl
+import certifi # pip3 install --upgrade certifi
+
 
 
 # 설정 파일 읽기
@@ -12,7 +16,7 @@ with open("/opt/airflow/slack_info.json") as f:
     config = json.load(f)
 
 # 특정 채널 ID 설정
-TARGET_CHANNEL_ID = 'C075U6B360P'
+TARGET_CHANNEL_ID = '채널 세부정보 참조하여 수정 필요'
 
 # DB 접속정보 [slack_info.json]
 dbname = config['DB_NAME']
@@ -21,6 +25,12 @@ password = config['PASSWORD']
 host = config['HOST']
 port = config["PORT"]
 schema = config["SCHEMA"]
+
+# ssl._create_default_https_context = ssl._create_unverified_context
+# ssl_context = ssl.create_default_context(cafile=certifi.where())
+# slack_client = WebClient(token=config["SLACK_BOT_TOKEN"], ssl=ssl_context)
+#
+# app = App(client=slack_client, ssl_check_enabled=False)
 
 app = App(token=config["SLACK_BOT_TOKEN"])
 
@@ -213,7 +223,7 @@ def handle_event(event, say, logger):
     if channel_id != TARGET_CHANNEL_ID:
         return
 
-    if user_id not in user_states:
+    if user_id not in user_states and event['type'] == 'app_mention':
         display_initial_options(say)
         user_states[user_id] = 'waiting_for_selection'
     elif user_states[user_id] == 'waiting_for_location':

@@ -26,6 +26,7 @@ host = config['HOST']
 port = config["PORT"]
 schema = config["SCHEMA"]
 
+# SSL 인증 오류시 아래 주석으로 감싸진 코드 이용
 # ssl._create_default_https_context = ssl._create_unverified_context
 # ssl_context = ssl.create_default_context(cafile=certifi.where())
 # slack_client = WebClient(token=config["SLACK_BOT_TOKEN"], ssl=ssl_context)
